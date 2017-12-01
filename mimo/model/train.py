@@ -1,7 +1,6 @@
-import argparse
 import math
 import time
-from collections import namedtuple
+from collections import defaultdict
 from types import SimpleNamespace
 
 from tqdm import tqdm
@@ -12,6 +11,7 @@ from mimo.model.components import PAD
 from mimo.model.model import Transformer, MimoTransformer
 from mimo.model.loader import DataLoader, MimoDataLoader
 from mimo.model.components.optim import ScheduledOptim
+from mimo.model.preprocess import target_config
 
 
 def get_performance(crit, pred, gold):
@@ -24,6 +24,7 @@ def get_performance(crit, pred, gold):
     n_correct = n_correct.masked_select(gold.ne(PAD).data).sum()
 
     return loss, n_correct
+
 
 def train_epoch(model, training_data, crit, optimizer):
     model.train()
@@ -82,7 +83,6 @@ def eval_epoch(model, validation_data, crit):
 
     return total_loss/n_total_words, n_total_correct/n_total_words
 
-from collections import defaultdict
 
 def train_mimo_epoch(model, training_data, crit, optimizer):
     model.train()
@@ -172,7 +172,7 @@ def eval_mimo_epoch(model, validation_data, crit):
     return total_loss/n_total_words, n_total_correct/n_total_words
 
 
-def train(model, training_data, validation_data, crit, optimizer, opt):
+def train(model, training_data, validation_data, crit, optimizer, opt, config):
     log_train_file = None
     log_valid_file = None
 
@@ -194,9 +194,9 @@ def train(model, training_data, validation_data, crit, optimizer, opt):
         start = time.time()
         train_stats = train_mimo_epoch(model, training_data, crit, optimizer)
         print('### Training - elapsed: {elapse:3.3f} min '.format(elapse=(time.time() - start) / 60))
-        for k, (train_loss, train_accu, num_train_word, num_train_inst) in train_stats.items():
-            print('  - ' + k)
-            print('  ppl: {ppl: 8.5f}, accuracy: {accu:3.3f} %, total: {num_inst:.0f}, tokens: {num_words:.0f}'.format(
+        for k, (train_loss, train_accu, num_train_word, num_train_inst) in sorted(train_stats.items(), key=lambda kv: kv[0]):
+            print('{relation}: ppl: {ppl: 8.2f}, acc: {accu:3.2f} %, num: {num_inst:.0f}, tks: {num_words:.0f}'.format(
+                relation=k.rjust(30),
                 ppl=math.exp(min(train_loss, 100)),
                 num_words=num_train_word,
                 num_inst=num_train_inst,
@@ -218,7 +218,9 @@ def train(model, training_data, validation_data, crit, optimizer, opt):
         checkpoint = {
             'model': model_state_dict,
             'settings': opt,
-            'epoch': epoch_i}
+            'epoch': epoch_i,
+            'config': config
+        }
 
         if opt.save_model:
             if opt.save_mode == 'all':
@@ -272,7 +274,6 @@ def main():
     # prepare data
     data = torch.load(opt.data)
     opt.max_token_src_seq_len = data['settings'].max_token_src_seq_len
-    opt.max_token_tgt_seq_len = data['settings'].max_token_tgt_seq_len
 
     print('inst', data['train']['tgt'][0])
 
@@ -300,25 +301,6 @@ def main():
     if opt.embs_share_weight and training_data.src_word2idx != training_data.tgt_word2idx:
         print('[Warning] The src/tgt word2idx table are different but asked to share word embedding.')
 
-    #print(opt)
-
-    # model
-    #transformer = Transformer(
-    #    opt.src_vocab_size,
-    #    opt.tgt_vocab_size,
-    #    opt.max_token_src_seq_len,
-    #    opt.max_token_tgt_seq_len,
-    #    proj_share_weight = opt.proj_share_weight,
-    #    embs_share_weight = opt.embs_share_weight,
-    #    d_k = opt.d_k,
-    #    d_v = opt.d_v,
-    #    d_model = opt.d_model,
-    #    d_word_vec = opt.d_word_vec,
-    #    d_inner_hid = opt.d_inner_hid,
-    #    n_layers = opt.n_layers,
-    #    n_head = opt.n_head,
-    #    dropout = opt.dropout)
-
     default_decoder_params = {
         'd_model': opt.d_model,
         'd_word_vec': opt.d_word_vec,
@@ -327,19 +309,20 @@ def main():
         'n_head': opt.n_head // 2,
         'dropout': opt.dropout,
         'n_tgt_vocab': opt.tgt_vocab_size,
-        'n_max_tgt_seq': opt.max_token_tgt_seq_len
     }
     decoders = {}
-    for d in ['<sex_or_gender>', '<occupation>', '<country_of_citizenship>']:
-        decoders[d] = {
-            'name': d
-        }
-        decoders[d].update(default_decoder_params)
+    for k, config in target_config.items():
+        decoders[k] = {}
+        decoders[k].update(default_decoder_params)
+        decoders[k].update(config)
+    config = {
+        'decoders': decoders
+    }
 
     transformer = MimoTransformer(
         opt.src_vocab_size,
         opt.max_token_src_seq_len,
-        decoders,
+        config['decoders'],
         proj_share_weight=opt.proj_share_weight,
         embs_share_weight=opt.embs_share_weight,
         d_model=opt.d_model,
@@ -364,4 +347,4 @@ def main():
         transformer = transformer.cuda()
         crit = crit.cuda()
 
-    train(transformer, training_data, validation_data, crit, optimizer, opt)
+    train(transformer, training_data, validation_data, crit, optimizer, opt, config)

@@ -202,7 +202,7 @@ class MimoTransformer(nn.Module):
             print(params)
 
             decoder = Decoder(
-                params['n_tgt_vocab'], params['n_max_tgt_seq'],
+                params['n_tgt_vocab'], params['max_len']+2,
                 n_layers=params['n_layers'], n_head=params['n_head'],
                 d_word_vec=params['d_word_vec'], d_model=params['d_model'],
                 d_inner_hid=params['d_inner_hid'], dropout=dropout)

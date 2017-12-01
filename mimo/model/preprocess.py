@@ -1,28 +1,68 @@
 import gzip
 import ujson as json
 import torch
-from collections import namedtuple
 from tqdm import tqdm
 import random
+from types import SimpleNamespace
 
 from mimo.model.components import BOS_WORD, EOS_WORD, PAD_WORD, UNK_WORD
 from mimo.model.components import BOS, EOS, PAD, UNK
+
+targets = [{
+    'name': 'given name',
+    'max_len': 3,
+}, {
+    'name': 'family name',
+    'max_len': 3
+}, {
+    'name': 'sex or gender',
+    'max_len': 1
+}, {
+    'name': 'date of birth',
+    'max_len': 4
+}, {
+    'name': 'occupation',
+    'max_len': 3
+}, {
+    'name': 'country of citizenship',
+    'max_len': 4
+}, {
+    'name': 'date of death',
+    'max_len': 4
+}, {
+    'name': 'place of birth',
+    'max_len': 5
+}, {
+    'name': 'educated at',
+    'max_len': 7
+}, {
+    'name': 'member of sports team',
+    'max_len': 9
+}, {
+    'name': 'place of death',
+    'max_len': 5
+}, {
+    'name': 'position held',
+    'max_len': 9
+}, {
+    'name': 'participant of',
+    'max_len': 8
+}, {
+    'name': 'member of political party',
+    'max_len': 6
+}, {
+    'name': 'award received',
+    'max_len': 10
+}, {
+    'name': 'sport',
+    'max_len': 2
+}]
 
 
 def normalize_relation_name(r):
     return '<' + r.replace(' ', '_') + '>'
 
-relation_types = [
-    #'date of birth',
-    #'place of birth',
-    'sex or gender',
-    'country of citizenship',
-    #'sport',
-    #'given name',
-    #'family name',
-    'occupation'
-]
-norm_relation_types = [normalize_relation_name(r) for r in relation_types]
+target_config = {normalize_relation_name(t['name']): t for t in targets}
 
 word2idx = {
     BOS_WORD: BOS,
@@ -30,46 +70,30 @@ word2idx = {
     PAD_WORD: PAD,
     UNK_WORD: UNK,
 }
-for i, r in enumerate(norm_relation_types):
-    word2idx[r] = max(word2idx.values()) + 1
+for i, k in enumerate(target_config.keys()):
+    word2idx[k] = max(word2idx.values()) + 1
 
 
-def encode_instance(instance, max_src_len, max_tgt_len):
+def encode_mimo_instance(instance, max_src_len):
     if 'summary' not in instance or not instance['summary']:
         return []
     if not instance['mentions']:
         return []
 
-    left, span, right = random.choice(instance['mentions'])
-    mention = left + span + right
-
-    sources = [mention]
-    relations = [(normalize_relation_name(k), v) for k, v in instance['relations'].items() if k in relation_types and v]
-
-    if not relations:
-        return []
-
-    pairs = []
-    for source in sources:
-        for name, target in relations:
-            src = source[:max_src_len]
-            tgt = target[:max_tgt_len]
-            pairs.append((
-                instance['_id'],
-                [BOS_WORD] + src + [EOS_WORD],
-                [BOS_WORD] + tgt + [EOS_WORD]
-            ))
-    return pairs
-
-
-def encode_mimo_instance(instance, max_src_len, max_tgt_len):
-    if 'summary' not in instance or not instance['summary']:
-        return []
-    sources = [instance['summary']]
-    relations = [(normalize_relation_name(k), v) for k, v in instance['relations'].items() if k in relation_types and v]
+    relations = []
+    for k, v in instance['relations'].items():
+        k = normalize_relation_name(k)
+        if k in target_config and v:
+            relations.append((k, v))
 
     if not relations:
         return []
+
+    num_inputs = 1
+
+    sources = []
+    for left, span, right in random.sample(instance['mentions'], min(num_inputs, len(instance['mentions']))):
+        sources.append(left + ['|'] + span + ['|'] + right)
 
     pairs = []
     for source in sources:
@@ -77,13 +101,13 @@ def encode_mimo_instance(instance, max_src_len, max_tgt_len):
         pairs.append((
             instance['_id'],
             [BOS_WORD] + src + [EOS_WORD],
-            {name: [BOS_WORD] + target[:max_tgt_len] + [EOS_WORD] for name, target in relations}
+            {name: [BOS_WORD] + target[:target_config[name]['max_len']] + [EOS_WORD] for name, target in relations}
         ))
 
     return pairs
 
 
-def read_instances(path, max_src_len, max_tgt_len, limit=None):
+def read_instances(path, max_src_len, limit=None):
     iids = []
     src_inst = []
     tgt_inst = []
@@ -94,7 +118,7 @@ def read_instances(path, max_src_len, max_tgt_len, limit=None):
     with gzip.open(path) as f:
         for line in tqdm(f):
             num_instances += 1
-            for iid, src, tgt in encode_mimo_instance(json.loads(line), max_src_len, max_tgt_len):
+            for iid, src, tgt in encode_mimo_instance(json.loads(line), max_src_len):
                 iids.append(iid)
                 src_inst.append(src)
                 tgt_inst.append(tgt)
@@ -142,34 +166,23 @@ params = {
     'train_path': 'train.jsonl.gz',
     'valid_path': 'dev.jsonl.gz',
     'save_data': 'dataset.pt',
-    'max_src_seq_len': 40,
-    'max_tgt_seq_len': 40,
-    'max_token_src_seq_len': 40 + 2,
-    'max_token_tgt_seq_len': 10 + 2,
+    'max_src_seq_len': 30,
+    'max_token_src_seq_len': 30 + 2,
     'min_word_count': 5,
     'keep_case': False,
     'share_vocab': True,
     'vocab': None,
 }
 
-PreprocessOptions = namedtuple('PreprocessOptions', list(params.keys()))
 
 def main():
-    opt = PreprocessOptions(**params)
+    opt = SimpleNamespace(**params)
 
     # load training set
-    _, train_src_word_insts, train_tgt_insts = read_instances(
-        opt.train_path,
-        opt.max_src_seq_len,
-        opt.max_tgt_seq_len,
-        50000)
+    _, train_src_word_insts, train_tgt_insts = read_instances(opt.train_path, opt.max_src_seq_len, 50000)
 
     # load validation set
-    _, valid_src_word_insts, valid_tgt_insts = read_instances(
-        opt.valid_path,
-        opt.max_src_seq_len,
-        opt.max_tgt_seq_len,
-        10000)
+    _, valid_src_word_insts, valid_tgt_insts = read_instances(opt.valid_path, opt.max_src_seq_len, 5000)
 
     train_tgt_word_insts = [tokens for inst in train_tgt_insts for tokens in inst.values()]
 

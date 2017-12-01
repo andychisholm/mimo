@@ -5,6 +5,7 @@ from torch.autograd import Variable
 from mimo.model.components.models import Transformer, MimoTransformer
 from mimo.model.decode import Beam
 
+
 class Model(object):
     def __init__(self, opt):
         self.opt = opt
@@ -194,27 +195,10 @@ class MimoModel(object):
         model_opt = checkpoint['settings']
         self.model_opt = model_opt
 
-        default_decoder_params = {
-            'd_model': model_opt.d_model,
-            'd_word_vec': model_opt.d_word_vec,
-            'd_inner_hid': model_opt.d_inner_hid,
-            'n_layers': model_opt.n_layers // 2,
-            'n_head': model_opt.n_head // 2,
-            'dropout': model_opt.dropout,
-            'n_tgt_vocab': model_opt.tgt_vocab_size,
-            'n_max_tgt_seq': model_opt.max_token_tgt_seq_len
-        }
-        decoders = {}
-        for d in ['<sex_or_gender>', '<occupation>', '<country_of_citizenship>']:
-            decoders[d] = {
-                'name': d
-            }
-            decoders[d].update(default_decoder_params)
-
         model = MimoTransformer(
             model_opt.src_vocab_size,
             model_opt.max_token_src_seq_len,
-            decoders,
+            checkpoint['config']['decoders'],
             proj_share_weight=model_opt.proj_share_weight,
             embs_share_weight=model_opt.embs_share_weight,
             d_model=model_opt.d_model,
@@ -276,7 +260,7 @@ class MimoModel(object):
             n_remaining_sents = batch_size
 
             # decode
-            for i in range(self.model_opt.max_token_tgt_seq_len):
+            for i in range(self.model.decoders[k]['model'].n_max_seq):
                 len_dec_seq = i + 1
 
                 # preparing decoded data seq

@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch.autograd import Variable
 from mimo.model.components import PAD
-from mimo.model.preprocess import norm_relation_types
+from mimo.model.preprocess import target_config
 
 
 class DataLoader(object):
@@ -243,7 +243,7 @@ class MimoDataLoader(object):
             src_insts = self._src_insts[start_idx:end_idx]
 
             if not self._tgt_insts:
-                return {k: pad_to_longest(src_insts) for k in norm_relation_types}
+                return {k: pad_to_longest(src_insts) for k in target_config.keys()}
             else:
                 tgt_insts = self._tgt_insts[start_idx:end_idx]
 
@@ -258,21 +258,6 @@ class MimoDataLoader(object):
                     k: (pad_to_longest(src_insts_by_k[k]), pad_to_longest(tgt_insts_by_k[k]))
                     for k in tgt_insts_by_k.keys()
                 }
-
-                #for k in norm_relation_types:
-                #    insts = insts_by_k.get(k, [])
-                #    if len(insts) < len(src_insts):
-                #        insts.extend([[]] * (len(src_insts) - len(insts)))
-                #    insts_by_k[k] = insts
-
-                #print('INSTANCES', len(src_insts), [len(v) for v in insts_by_k.values()])
-                #print(src_insts)
-                #print()
-                #print(insts_by_k)
-                #print()
-
-                #tgt = {k: pad_to_longest(insts) for k, insts in insts_by_k.items()}
-                #return (src_data, src_pos), tgt
 
         else:
 

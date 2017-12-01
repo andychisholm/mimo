@@ -3,28 +3,26 @@ from mimo.model.model import Model, MimoModel
 from mimo.model.loader import DataLoader, MimoDataLoader
 from mimo.model.preprocess import convert_instance_to_idx_seq, convert_mimo_instances_to_idx_seq
 from mimo.model.preprocess import read_instances
-from collections import namedtuple
+from types import SimpleNamespace
 
 params = {
     'model': 'model.chkpt',
     'vocab': 'dataset.pt',
     'beam_size': 5,
-    'batch_size': 32,
+    'batch_size': 16,
     'n_best': 1,
     'cuda': True
 }
 
-TranslateOptions = namedtuple('TranslateOptions', list(params.keys()))
-
 
 def iter_decode(instances_path, limit):
-    opt = TranslateOptions(**params)
+    opt = SimpleNamespace(**params)
 
     data = torch.load(opt.vocab)
     settings = data['settings']
 
     sequences = []
-    for iid, source, targets in zip(*read_instances(instances_path, settings.max_src_seq_len, settings.max_tgt_seq_len, limit)):
+    for iid, source, targets in zip(*read_instances(instances_path, settings.max_src_seq_len, limit)):
         sequences.append({
             'instance_id': iid,
             'source': source,
@@ -47,9 +45,6 @@ def iter_decode(instances_path, limit):
     def _flattened_results(batched_data):
         for batch in batched_data:
             results = translator.translate_batch(batch)
-
-            #import code
-            #code.interact(local=locals())
 
             results_by_instance = []
             for k, (all_hyp, all_scores) in results.items():
