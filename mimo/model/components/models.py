@@ -15,8 +15,8 @@ def position_encoding_init(n_position, d_pos_vec):
         [pos / np.power(10000, 2 * (j // 2) / d_pos_vec) for j in range(d_pos_vec)]
         if pos != 0 else np.zeros(d_pos_vec) for pos in range(n_position)])
 
-    position_enc[1:, 0::2] = np.sin(position_enc[1:, 0::2]) # dim 2i
-    position_enc[1:, 1::2] = np.cos(position_enc[1:, 1::2]) # dim 2i+1
+    position_enc[1:, 0::2] = np.sin(position_enc[1:, 0::2])  # dim 2i
+    position_enc[1:, 1::2] = np.cos(position_enc[1:, 1::2])  # dim 2i+1
     return torch.from_numpy(position_enc).type(torch.FloatTensor)
 
 
@@ -245,6 +245,7 @@ class MimoTransformer(nn.Module):
 
             decoder = self.decoders[name]['model']
             dec_output, *_ = decoder(tgt_seq, tgt_pos, src_seq, enc_output)
+
             seq_logit = decoder.tgt_word_proj(dec_output)
             dec_outputs[name] = seq_logit.view(-1, seq_logit.size(2))
 

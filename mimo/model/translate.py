@@ -1,6 +1,6 @@
 import torch
-from mimo.model.model import Model, MimoModel
-from mimo.model.loader import DataLoader, MimoDataLoader
+from mimo.model.model import MimoModel
+from mimo.model.loader import MimoDataLoader
 from mimo.model.preprocess import convert_instance_to_idx_seq, convert_mimo_instances_to_idx_seq
 from mimo.model.preprocess import read_instances
 from types import SimpleNamespace
@@ -22,7 +22,7 @@ def iter_decode(instances_path, limit):
     settings = data['settings']
 
     sequences = []
-    for iid, source, targets in zip(*read_instances(instances_path, settings.max_src_seq_len, limit)):
+    for iid, source, targets in zip(*read_instances(instances_path, settings.max_src_seq_len, 10, limit)):
         sequences.append({
             'instance_id': iid,
             'source': source,
@@ -61,6 +61,6 @@ def iter_decode(instances_path, limit):
             for idx_seq, score in decodes:
                 sequence['outputs'].setdefault(relation, []).append({
                     'score': score,
-                    'tokens': [batched_data.tgt_idx2word[idx] for idx in idx_seq]
+                    'tokens': [batched_data.tgt_idx2word[relation][idx] for idx in idx_seq]
                 })
         yield sequence

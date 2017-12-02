@@ -101,5 +101,25 @@ class DecoderLayer(nn.Module):
         dec_output, dec_slf_attn = self.slf_attn(dec_input, dec_input, dec_input, attn_mask=slf_attn_mask)
         dec_output, dec_enc_attn = self.enc_attn(dec_output, enc_output, enc_output, attn_mask=dec_enc_attn_mask)
         dec_output = self.pos_ffn(dec_output)
+        return dec_output, dec_slf_attn, dec_enc_attn
+
+
+class MultiDecoderLayer(nn.Module):
+    def __init__(self, d_model, d_inner_hid, n_head, d_k, d_v, dropout=0.1):
+        super(DecoderLayer, self).__init__()
+        self.slf_attn = MultiHeadAttention(n_head, d_model, d_k, d_v, dropout=dropout)
+
+        self.sub_enc_attn = MultiHeadAttention(n_head, d_model, d_k, d_v, dropout=dropout)
+        self.enc_attn = MultiHeadAttention(n_head, d_model, d_k, d_v, dropout=dropout)
+
+        self.pos_ffn = PositionwiseFeedForward(d_model, d_inner_hid, dropout=dropout)
+
+    def forward(self, dec_input, enc_outputs, slf_attn_mask=None, dec_enc_attn_mask=None):
+        dec_output, dec_slf_attn = self.slf_attn(dec_input, dec_input, dec_input, attn_mask=slf_attn_mask)
+
+        #enc_output =
+        enc_output = sum(self.sub_enc_attn(dec_output, eo, eo, attn_mask=dec_enc_attn_mask) for eo in enc_outputs)
+        dec_output, dec_enc_attn = self.enc_attn(dec_output, enc_output, enc_output, attn_mask=dec_enc_attn_mask)
+        dec_output = self.pos_ffn(dec_output)
 
         return dec_output, dec_slf_attn, dec_enc_attn

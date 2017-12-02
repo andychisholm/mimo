@@ -5,6 +5,8 @@ from tqdm import tqdm
 import random
 from types import SimpleNamespace
 
+random.seed(1447)
+
 from mimo.model.components import BOS_WORD, EOS_WORD, PAD_WORD, UNK_WORD
 from mimo.model.components import BOS, EOS, PAD, UNK
 
@@ -26,6 +28,9 @@ targets = [{
 }, {
     'name': 'country of citizenship',
     'max_len': 4
+}, {
+    'name': 'sport',
+    'max_len': 2
 }, {
     'name': 'date of death',
     'max_len': 4
@@ -53,9 +58,6 @@ targets = [{
 }, {
     'name': 'award received',
     'max_len': 10
-}, {
-    'name': 'sport',
-    'max_len': 2
 }]
 
 
@@ -64,17 +66,8 @@ def normalize_relation_name(r):
 
 target_config = {normalize_relation_name(t['name']): t for t in targets}
 
-word2idx = {
-    BOS_WORD: BOS,
-    EOS_WORD: EOS,
-    PAD_WORD: PAD,
-    UNK_WORD: UNK,
-}
-for i, k in enumerate(target_config.keys()):
-    word2idx[k] = max(word2idx.values()) + 1
 
-
-def encode_mimo_instance(instance, max_src_len):
+def encode_mimo_instance(instance, max_src_len, max_inputs):
     if 'summary' not in instance or not instance['summary']:
         return []
     if not instance['mentions']:
@@ -89,10 +82,10 @@ def encode_mimo_instance(instance, max_src_len):
     if not relations:
         return []
 
-    num_inputs = 1
+    mentions = random.sample(instance['mentions'], min(max_inputs, len(instance['mentions'])))
 
     sources = []
-    for left, span, right in random.sample(instance['mentions'], min(num_inputs, len(instance['mentions']))):
+    for left, span, right in mentions:
         sources.append(left + ['|'] + span + ['|'] + right)
 
     pairs = []
@@ -107,7 +100,7 @@ def encode_mimo_instance(instance, max_src_len):
     return pairs
 
 
-def read_instances(path, max_src_len, limit=None):
+def read_instances(path, max_src_len, max_inputs, limit=None):
     iids = []
     src_inst = []
     tgt_inst = []
@@ -118,7 +111,7 @@ def read_instances(path, max_src_len, limit=None):
     with gzip.open(path) as f:
         for line in tqdm(f):
             num_instances += 1
-            for iid, src, tgt in encode_mimo_instance(json.loads(line), max_src_len):
+            for iid, src, tgt in encode_mimo_instance(json.loads(line), max_src_len, max_inputs=max_inputs):
                 iids.append(iid)
                 src_inst.append(src)
                 tgt_inst.append(tgt)
@@ -136,6 +129,15 @@ def build_vocab_idx(word_insts, min_word_count):
 
     word_count = {w: 0 for w in full_vocab}
 
+    word2idx = {
+        BOS_WORD: BOS,
+        EOS_WORD: EOS,
+        PAD_WORD: PAD,
+        UNK_WORD: UNK,
+    }
+    #for i, k in enumerate(target_config.keys()):
+    #    word2idx[k] = max(word2idx.values()) + 1
+
     for sent in word_insts:
         for word in sent:
             word_count[word] += 1
@@ -143,7 +145,7 @@ def build_vocab_idx(word_insts, min_word_count):
     ignored_word_count = 0
     for word, count in word_count.items():
         if word not in word2idx:
-            if count > min_word_count:
+            if count >= min_word_count:
                 word2idx[word] = len(word2idx)
             else:
                 ignored_word_count += 1
@@ -159,18 +161,19 @@ def convert_instance_to_idx_seq(word_insts, word2idx):
 
 
 def convert_mimo_instances_to_idx_seq(instances, word2idx):
-    return [{k:[word2idx[w] if w in word2idx else UNK for w in s] for k, s in inst.items()} for inst in instances]
+    return [{k: [word2idx[k][w] if w in word2idx[k] else UNK for w in s] for k, s in inst.items()} for inst in instances]
 
 
 params = {
     'train_path': 'train.jsonl.gz',
     'valid_path': 'dev.jsonl.gz',
     'save_data': 'dataset.pt',
-    'max_src_seq_len': 30,
-    'max_token_src_seq_len': 30 + 2,
+    'max_src_seq_len': 35,
+    'max_token_src_seq_len': 35 + 2,
     'min_word_count': 5,
+    'min_tgt_word_count': 2,
     'keep_case': False,
-    'share_vocab': True,
+    'share_vocab': False,
     'vocab': None,
 }
 
@@ -179,12 +182,10 @@ def main():
     opt = SimpleNamespace(**params)
 
     # load training set
-    _, train_src_word_insts, train_tgt_insts = read_instances(opt.train_path, opt.max_src_seq_len, 50000)
+    _, train_src_word_insts, train_tgt_insts = read_instances(opt.train_path, opt.max_src_seq_len, 2, 250000)
 
     # load validation set
-    _, valid_src_word_insts, valid_tgt_insts = read_instances(opt.valid_path, opt.max_src_seq_len, 5000)
-
-    train_tgt_word_insts = [tokens for inst in train_tgt_insts for tokens in inst.values()]
+    _, valid_src_word_insts, valid_tgt_insts = read_instances(opt.valid_path, opt.max_src_seq_len, 2, 25000)
 
     # build vocab
     if opt.vocab:
@@ -196,15 +197,27 @@ def main():
         tgt_word2idx = predefined_data['dict']['tgt']
     else:
         if opt.share_vocab:
+            train_tgt_word_insts = [tokens for inst in train_tgt_insts for tokens in inst.values()]
+
             print('[Info] Build shared vocabulary for source and target.')
-            word2idx = build_vocab_idx(
-                train_src_word_insts + train_tgt_word_insts, opt.min_word_count)
-            src_word2idx = tgt_word2idx = word2idx
+            word2idx = build_vocab_idx(train_src_word_insts + train_tgt_word_insts, opt.min_word_count)
+            src_word2idx = word2idx
+            tgt_word2idx = {k: word2idx for k in target_config.keys()}
         else:
             print('[Info] Build vocabulary for source.')
             src_word2idx = build_vocab_idx(train_src_word_insts, opt.min_word_count)
-            print('[Info] Build vocabulary for target.')
-            tgt_word2idx = build_vocab_idx(train_tgt_word_insts, opt.min_word_count)
+
+            print('[Info] Build vocabulary for targets.')
+            tgt_tokens = {}
+            for inst in train_tgt_insts:
+                for k, tokens in inst.items():
+                    tgt_tokens.setdefault(k, []).append(tokens)
+
+            tgt_word2idx = {}
+            for k in target_config.keys():
+                vocab = build_vocab_idx(tgt_tokens[k], opt.min_tgt_word_count)
+                tgt_word2idx[k] = vocab
+                print(k.rjust(30), len(vocab), len(tgt_tokens[k]))
 
     # word to index
     print('[Info] Convert source word instances into sequences of word index.')
@@ -219,13 +232,17 @@ def main():
         'settings': opt,
         'dict': {
             'src': src_word2idx,
-            'tgt': tgt_word2idx},
+            'tgt': tgt_word2idx
+        },
         'train': {
             'src': train_src_insts,
-            'tgt': train_tgt_insts},
+            'tgt': train_tgt_insts
+        },
         'valid': {
             'src': valid_src_insts,
-            'tgt': valid_tgt_insts}}
+            'tgt': valid_tgt_insts
+        }
+    }
 
     print('[Info] Dumping the processed data to pickle file', opt.save_data)
     torch.save(data, opt.save_data)
