@@ -187,6 +187,7 @@ class MimoTransformer(nn.Module):
             proj_share_weight=True, embs_share_weight=True):
         super().__init__()
 
+        self.d_model = d_model
         self.encoder = Encoder(
             n_src_vocab, n_max_src_seq, n_layers=n_layers, n_head=n_head,
             d_word_vec=d_word_vec, d_model=d_model,
@@ -198,8 +199,6 @@ class MimoTransformer(nn.Module):
         self.decoders = {}
         for name, params in decoder_params.items():
             assert params['d_model'] == params['d_word_vec'], "Module outputs must be same for residuals"
-            print("Building decoder: ", name)
-            print(params)
 
             decoder = Decoder(
                 params['n_tgt_vocab'], params['max_len']+2,
@@ -238,13 +237,20 @@ class MimoTransformer(nn.Module):
         enc_output, *_ = self.encoder(src_seq, src_pos)
 
         dec_outputs = {}
-        for name, tgt in tgts.items():
+        for name, (src_idxs, tgt) in tgts.items():
+            if src_idxs is not None:
+                tgt_src_seq = src_seq[src_idxs]  #torch.index_select(src_seq, 0, src_idxs)
+                tgt_enc_out = enc_output[src_idxs]  #torch.index_select(enc_output, 0, src_idxs)
+            else:
+                tgt_src_seq = src_seq
+                tgt_enc_out = enc_output
+
             tgt_seq, tgt_pos = tgt
             tgt_seq = tgt_seq[:, :-1]
             tgt_pos = tgt_pos[:, :-1]
 
             decoder = self.decoders[name]['model']
-            dec_output, *_ = decoder(tgt_seq, tgt_pos, src_seq, enc_output)
+            dec_output, *_ = decoder(tgt_seq, tgt_pos, tgt_src_seq, tgt_enc_out)
 
             seq_logit = decoder.tgt_word_proj(dec_output)
             dec_outputs[name] = seq_logit.view(-1, seq_logit.size(2))

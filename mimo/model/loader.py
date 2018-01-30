@@ -4,11 +4,12 @@ import torch
 from torch.autograd import Variable
 from mimo.model.components import PAD
 from mimo.model.preprocess import target_config
+from torch.autograd import Variable
 
 
 class MimoDataLoader(object):
     def __init__(self, src_word2idx, tgt_word2idx, src_insts=None, tgt_insts=None,
-                 cuda=True, batch_size=64, shuffle=True, test=False):
+                 cuda=True, batch_size=64, shuffle=True, test=False, max_iters_per_epoch=None):
 
         assert src_insts
         assert len(src_insts) >= batch_size
@@ -18,7 +19,11 @@ class MimoDataLoader(object):
 
         self.cuda = cuda
         self.test = test
+
+        self._max_iters_per_epoch = max_iters_per_epoch
         self._n_batch = int(np.ceil(len(src_insts) / batch_size))
+        if self._max_iters_per_epoch is not None:
+            self._n_batch = min(self._max_iters_per_epoch, self._n_batch)
 
         self._batch_size = batch_size
 
@@ -116,19 +121,19 @@ class MimoDataLoader(object):
             src_insts = self._src_insts[start_idx:end_idx]
 
             if not self._tgt_insts:
-                return {k: pad_to_longest(src_insts) for k in target_config.keys()}
+                return pad_to_longest(src_insts)
             else:
                 tgt_insts = self._tgt_insts[start_idx:end_idx]
 
                 tgt_insts_by_k = {}
-                src_insts_by_k = {}
-                for src, tgts in zip(src_insts, tgt_insts):
+                src_idxs_by_k = {}
+                for i, (src, tgts) in enumerate(zip(src_insts, tgt_insts)):
                     for k, tgt in tgts.items():
                         tgt_insts_by_k.setdefault(k, []).append(tgt)
-                        src_insts_by_k.setdefault(k, []).append(src)
+                        src_idxs_by_k.setdefault(k, []).append(i)
 
-                return {
-                    k: (pad_to_longest(src_insts_by_k[k]), pad_to_longest(tgt_insts_by_k[k]))
+                return pad_to_longest(src_insts), {
+                    k: (torch.LongTensor(src_idxs_by_k[k]).cuda(), pad_to_longest(tgt_insts_by_k[k]))
                     for k in tgt_insts_by_k.keys()
                 }
 

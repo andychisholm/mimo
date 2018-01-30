@@ -1,5 +1,5 @@
 import torch
-from mimo.model.model import MimoModel
+from mimo.model.model import GenerationModel
 from mimo.model.loader import MimoDataLoader
 from mimo.model.preprocess import convert_instance_to_idx_seq, convert_mimo_instances_to_idx_seq
 from mimo.model.preprocess import read_instances
@@ -8,21 +8,19 @@ from types import SimpleNamespace
 params = {
     'model': 'model.chkpt',
     'vocab': 'dataset.pt',
-    'beam_size': 5,
-    'batch_size': 16,
-    'n_best': 1,
+    'batch_size': 32,
     'cuda': True
 }
 
 
-def iter_decode(instances_path, limit):
+def iter_decode(translator, instances_path, limit, mention_per_instance=5):
     opt = SimpleNamespace(**params)
 
     data = torch.load(opt.vocab)
     settings = data['settings']
 
     sequences = []
-    for iid, source, targets in zip(*read_instances(instances_path, settings.max_src_seq_len, 10, limit)):
+    for iid, source, targets in zip(*read_instances(instances_path, settings.max_src_seq_len, mention_per_instance, limit)):
         sequences.append({
             'instance_id': iid,
             'source': source,
@@ -37,10 +35,8 @@ def iter_decode(instances_path, limit):
         src_insts=[s['idx_sequence'] for s in sequences],
         cuda=opt.cuda,
         shuffle=False,
-        batch_size=opt.batch_size)
-
-    translator = MimoModel(opt)
-    translator.model.eval()
+        batch_size=opt.batch_size,
+        test=True)
 
     def _flattened_results(batched_data):
         for batch in batched_data:

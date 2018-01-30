@@ -1,7 +1,11 @@
 import math
 import time
+import json
+import os
 from collections import defaultdict
 from types import SimpleNamespace
+from shutil import copyfile
+
 
 from tqdm import tqdm
 import torch
@@ -12,6 +16,8 @@ from mimo.model.model import MimoTransformer
 from mimo.model.loader import MimoDataLoader
 from mimo.model.components.optim import ScheduledOptim
 from mimo.model.preprocess import target_config
+from mimo.model.model import GenerationModel
+from mimo.evaluate import decode_entity_relations, evaluate_decodes, get_summary_metrics
 
 
 def get_performance(crit, pred, gold):
@@ -26,64 +32,6 @@ def get_performance(crit, pred, gold):
     return loss, n_correct
 
 
-def train_epoch(model, training_data, crit, optimizer):
-    model.train()
-
-    total_loss = 0
-    n_total_words = 0
-    n_total_correct = 0
-
-    for batch in tqdm(training_data, mininterval=2, desc='  - (Training)   ', leave=False):
-        # prepare data
-        src, tgt = batch
-        gold = tgt[0][:, 1:]
-
-        # forward
-        optimizer.zero_grad()
-        pred = model(src, tgt)
-
-        # backward
-        loss, n_correct = get_performance(crit, pred, gold)
-        loss.backward()
-
-        # update parameters
-        optimizer.step()
-        optimizer.update_learning_rate()
-
-        # note keeping
-        n_words = gold.data.ne(PAD).sum()
-        n_total_words += n_words
-        n_total_correct += n_correct
-        total_loss += loss.data[0]
-
-    return total_loss/n_total_words, n_total_correct/n_total_words
-
-
-def eval_epoch(model, validation_data, crit):
-    model.eval()
-
-    total_loss = 0
-    n_total_words = 0
-    n_total_correct = 0
-
-    for batch in tqdm(validation_data, mininterval=2, desc='  - (Validation) ', leave=False):
-        # prepare data
-        src, tgt = batch
-        gold = tgt[0][:, 1:]
-
-        # forward
-        pred = model(src, tgt)
-        loss, n_correct = get_performance(crit, pred, gold)
-
-        # note keeping
-        n_words = gold.data.ne(PAD).sum()
-        n_total_words += n_words
-        n_total_correct += n_correct
-        total_loss += loss.data[0]
-
-    return total_loss/n_total_words, n_total_correct/n_total_words
-
-
 def train_mimo_epoch(model, training_data, crit, optimizer):
     model.train()
     training_data.shuffle()
@@ -93,27 +41,24 @@ def train_mimo_epoch(model, training_data, crit, optimizer):
     n_total_correct = defaultdict(float)
     n_total_inst = defaultdict(float)
 
-    max_batches_per_epoch = 1024
-
     for i, batch in enumerate(tqdm(training_data, mininterval=2, desc='  - (Training)   ', leave=False)):
-        if i == max_batches_per_epoch:
-            break
         # forward
         optimizer.zero_grad()
 
+        src, tgts = batch
+        preds = model(src, tgts)
+
         agg_loss = None
         agg_n_correct = None
-        for k, (src, tgt) in batch.items():
-            pred = model(src, {k:tgt})[k]
-
-            gold = tgt[0][:, 1:]
+        for k, pred in preds.items():
+            gold = tgts[k][1][0][:, 1:]
             loss, n_correct = get_performance(crit[k], pred, gold)
 
             # note keeping
             n_words = gold.data.ne(PAD).sum()
             n_total_words[k] += n_words
             n_total_correct[k] += n_correct
-            n_total_inst[k] += len(src[0])
+            n_total_inst[k] += len(tgts[k][0])
             total_loss[k] += loss.data[0]
 
             if agg_loss is None:
@@ -128,6 +73,41 @@ def train_mimo_epoch(model, training_data, crit, optimizer):
         optimizer.update_learning_rate()
 
 
+        if False:
+            """
+            agg_loss = None
+            agg_n_correct = None
+            for k, (src, tgt) in batch.items():
+                pred = model(src, {k:tgt})[k]
+
+                gold = tgt[0][:, 1:]
+                loss, n_correct = get_performance(crit[k], pred, gold)
+
+                # note keeping
+                n_words = gold.data.ne(PAD).sum()
+                n_total_words[k] += n_words
+                n_total_correct[k] += n_correct
+                n_total_inst[k] += len(src[0])
+                total_loss[k] += loss.data[0]
+
+                if agg_loss is None:
+                    agg_loss = loss
+                    agg_n_correct = n_correct
+                else:
+                    agg_loss += loss
+                    agg_n_correct += n_correct
+
+
+            agg_loss.backward()
+            optimizer.step()
+            optimizer.update_learning_rate()
+            """
+
+    total_loss['ALL'] = sum(total_loss.values())
+    n_total_correct['ALL'] = sum(n_total_correct.values())
+    n_total_words['ALL'] = sum(n_total_words.values())
+    n_total_inst['ALL'] = sum(n_total_inst.values())
+
     return {k: (
         total_loss[k]/n_total_words[k],
         n_total_correct[k]/n_total_words[k],
@@ -136,37 +116,19 @@ def train_mimo_epoch(model, training_data, crit, optimizer):
     ) for k in total_loss.keys()}
 
 
-def eval_mimo_epoch(model, validation_data, crit):
+def eval_mimo_epoch(model):
     model.eval()
+    start_time = time.time()
 
-    total_loss = 0
-    n_total_words = 0
-    n_total_correct = 0
-
-    for batch in tqdm(validation_data, mininterval=2, desc='  - (Validation) ', leave=False):
-        # prepare data
-        agg_loss = None
-        agg_n_correct = None
-        for k, (src, tgt) in batch.items():
-            pred = model(src, {k: tgt})[k]
-
-            gold = tgt[0][:, 1:]
-            loss, n_correct = get_performance(crit[k], pred, gold)
-
-            # note keeping
-            n_words = gold.data.ne(PAD).sum()
-            n_total_words += n_words
-            n_total_correct += n_correct
-            total_loss += loss.data[0]
-
-            if agg_loss is None:
-                agg_loss = loss
-                agg_n_correct = n_correct
-            else:
-                agg_loss += loss
-                agg_n_correct += n_correct
-
-    return total_loss/n_total_words, n_total_correct/n_total_words
+    generator = GenerationModel(model, beam_size=5, n_best=10)
+    decodes = decode_entity_relations(generator, 'dev.jsonl.gz', 512)
+    metrics = get_summary_metrics(evaluate_decodes(decodes))
+    return {
+        'micro': metrics['micro'],
+        'macro': metrics['macro'],
+        'timestamp': time.time(),
+        'elapsed': time.time() - start_time
+    }
 
 
 def train(model, training_data, validation_data, crit, optimizer, opt, config):
@@ -184,13 +146,14 @@ def train(model, training_data, validation_data, crit, optimizer, opt, config):
             log_tf.write('epoch,loss,ppl,accuracy\n')
             log_vf.write('epoch,loss,ppl,accuracy\n')
 
-    valid_accus = []
+    valid_history = []
+    persisted_models = set()
     for epoch_i in range(opt.epoch):
         print('[ Epoch', epoch_i, ']')
 
         start = time.time()
         train_stats = train_mimo_epoch(model, training_data, crit, optimizer)
-        print('### Train - elapsed: {elapse:3.3f} min '.format(elapse=(time.time() - start) / 60))
+        print('### Train - elapsed: {elapsed:3.1f} min, lr={lr} '.format(elapsed=((time.time() - start) / 60), lr=('%.1E'%optimizer.get_current_lr())))
         for k, (train_loss, train_accu, num_train_word, num_train_inst) in sorted(train_stats.items(), key=lambda kv: kv[0]):
             print('{relation}: ppl: {ppl: 8.2f}, acc: {accu:3.2f} %, num: {num_inst:.0f}, tks: {num_words:.0f}'.format(
                 relation=k.rjust(30),
@@ -199,70 +162,86 @@ def train(model, training_data, validation_data, crit, optimizer, opt, config):
                 num_inst=num_train_inst,
                 accu=100*train_accu))
 
+        valid_metrics = eval_mimo_epoch(model)
+        print('### Valid - elapsed: {elapsed:3.1f} min'.format(elapsed=valid_metrics['elapsed']/60))
+        print('          - Micro: %.3f' % (valid_metrics['micro']*100))
+        print('          - Macro: %.3f' % (valid_metrics['macro']*100))
 
-        start = time.time()
-        valid_loss, valid_accu = eval_mimo_epoch(model, validation_data, crit)
-        print('### Valid - elapsed: {elapse:3.3f} min '.format(elapse=(time.time() - start) / 60))
+        model_name = opt.save_model + '_{score}_{epoch}.chkpt'.format(
+            epoch=epoch_i, score=int(10000 * valid_metrics['micro']))
 
-        print('  - Aggregate')
-        print('ppl: {ppl: 8.5f}, accuracy: {accu:3.3f} %, '.format(
-                    ppl=math.exp(min(valid_loss, 100)), accu=100*valid_accu,
-                    elapse=(time.time()-start)/60))
-
-        valid_accus += [valid_accu]
+        valid_history.append({
+            'filename': model_name,
+            'tag': opt.save_model,
+            'epoch': epoch_i,
+            'metrics': valid_metrics,
+        })
 
         model_state_dict = model.state_dict()
         checkpoint = {
             'model': model_state_dict,
             'settings': opt,
             'epoch': epoch_i,
-            'config': config
+            'config': config,
+            'metrics': {
+                'validation': valid_metrics
+            }
         }
+        torch.save(checkpoint, model_name)
 
-        if opt.save_model:
-            if opt.save_mode == 'all':
-                model_name = opt.save_model + '_accu_{accu:3.3f}.chkpt'.format(accu=100*valid_accu)
-                torch.save(checkpoint, model_name)
-            elif opt.save_mode == 'best':
-                model_name = opt.save_model + '.chkpt'
-                if valid_accu >= max(valid_accus):
-                    torch.save(checkpoint, model_name)
-                    print('    - [Info] The checkpoint file has been updated.')
+        # prune saved models
+        persisted_models.add(epoch_i)
+        if len(persisted_models) > 5:
+            max_metric = None
+            max_id = None
+            min_metric = None
+            min_id = None
+            for i in sorted(persisted_models):
+                metric = valid_history[i]['metrics']['micro']
+                if min_metric is None or metric < min_metric:
+                    min_metric = metric
+                    min_id = i
+                if max_metric is None or metric >= max_metric:
+                    max_metric = metric
+                    max_id = i
+            os.remove(valid_history[min_id]['filename'])
+            persisted_models.remove(min_id)
+            copyfile(valid_history[max_id]['filename'], opt.save_model + '.chkpt')
 
         if log_train_file and log_valid_file:
             with open(log_train_file, 'a') as log_tf, open(log_valid_file, 'a') as log_vf:
                 log_tf.write('{epoch},{loss: 8.5f},{ppl: 8.5f},{accu:3.3f}\n'.format(
                     epoch=epoch_i, loss=train_loss,
                     ppl=math.exp(min(train_loss, 100)), accu=100*train_accu))
-                log_vf.write('{epoch},{loss: 8.5f},{ppl: 8.5f},{accu:3.3f}\n'.format(
-                    epoch=epoch_i, loss=valid_loss,
-                    ppl=math.exp(min(valid_loss, 100)), accu=100*valid_accu))
+
+                log_vf.write(json.dumps(valid_history[-1]) + '\n')
 
 
 params = {
     'data': 'dataset.pt',
-    'epoch': 20,
-    'batch_size': 64,
+    'epoch': 50,
+    'batch_size': 128,
 
-    'd_model': 512,
-    'd_word_vec': 512,
+    'd_model': 256,
+    'd_word_vec': 256,
     'd_inner_hid': 512,
 
     'd_k': 64,
     'd_v': 64,
 
     'n_head': 8,
-    'n_layers': 6,
-    'n_warmup_steps': 25000,
+    'n_layers': 4,
+    'n_warmup_steps': 16000,
 
     'dropout': 0.1,
     'embs_share_weight': False,
     'proj_share_weight': True,
-    'log': None,
-    'save_model': 'model',
-    'save_mode': 'best',
+    'log': 'model',
+    'save_model': 'bio',
+    'save_mode': 'all',
     'no_cuda': False,
-    'cuda': True
+    'cuda': True,
+    'batches_per_epoch': 1000
 }
 
 
@@ -281,7 +260,8 @@ def main():
         src_insts=data['train']['src'],
         tgt_insts=data['train']['tgt'],
         batch_size=opt.batch_size,
-        cuda=opt.cuda)
+        cuda=opt.cuda,
+        max_iters_per_epoch=params['batches_per_epoch'])  # 1024
 
     validation_data = MimoDataLoader(
         data['dict']['src'],
@@ -291,7 +271,8 @@ def main():
         batch_size=opt.batch_size,
         shuffle=False,
         test=True,
-        cuda=opt.cuda)
+        cuda=opt.cuda,
+        max_iters_per_epoch=64)  # 256
 
     opt.src_vocab_size = training_data.src_vocab_size
     opt.tgt_vocab_sizes = training_data.tgt_vocab_sizes
@@ -308,6 +289,7 @@ def main():
         'n_head': opt.n_head // 2,
         'dropout': opt.dropout
     }
+
     decoders = {}
     for k, config in target_config.items():
         decoders[k] = {}
@@ -331,7 +313,7 @@ def main():
         n_head=opt.n_head,
         dropout=opt.dropout)
 
-    adam = optim.Adam(transformer.get_trainable_parameters(), betas=(0.9, 0.98), eps=1e-09)
+    adam = optim.Adam(transformer.get_trainable_parameters(), betas=(0.9, 0.999), eps=1e-09)
     optimizer = ScheduledOptim(adam, opt.d_model, opt.n_warmup_steps)
 
     def get_criterion(vocab_size):

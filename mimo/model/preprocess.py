@@ -4,11 +4,14 @@ import torch
 from tqdm import tqdm
 import random
 from types import SimpleNamespace
+from itertools import chain
+from collections import Counter
 
 random.seed(1447)
 
 from mimo.model.components import BOS_WORD, EOS_WORD, PAD_WORD, UNK_WORD
 from mimo.model.components import BOS, EOS, PAD, UNK
+
 
 targets = [{
     'name': 'given name',
@@ -82,11 +85,17 @@ def encode_mimo_instance(instance, max_src_len, max_inputs):
     if not relations:
         return []
 
-    mentions = random.sample(instance['mentions'], min(max_inputs, len(instance['mentions'])))
+    if False:
+        mentions = [m for m in instance['mentions'] if list(chain(*m)) != instance['summary']]
+        if not mentions:
+            return []
 
-    sources = []
-    for left, span, right in mentions:
-        sources.append(left + ['|'] + span + ['|'] + right)
+        mentions = random.sample(mentions, min(max_inputs, len(mentions)))
+        sources = []
+        for left, span, right in mentions:
+            sources.append(left + ['|'] + span + ['|'] + right)
+    else:
+        sources = [instance['summary']]
 
     pairs = []
     for source in sources:
@@ -182,42 +191,34 @@ def main():
     opt = SimpleNamespace(**params)
 
     # load training set
-    _, train_src_word_insts, train_tgt_insts = read_instances(opt.train_path, opt.max_src_seq_len, 2, 250000)
+    _, train_src_word_insts, train_tgt_insts = read_instances(opt.train_path, opt.max_src_seq_len, 1, None)
 
     # load validation set
-    _, valid_src_word_insts, valid_tgt_insts = read_instances(opt.valid_path, opt.max_src_seq_len, 2, 25000)
+    _, valid_src_word_insts, valid_tgt_insts = read_instances(opt.valid_path, opt.max_src_seq_len, 1, None)
 
     # build vocab
-    if opt.vocab:
-        predefined_data = torch.load(opt.vocab)
-        assert 'dict' in predefined_data
+    if opt.share_vocab:
+        train_tgt_word_insts = [tokens for inst in train_tgt_insts for tokens in inst.values()]
 
-        print('[Info] Pre-defined vocabulary found.')
-        src_word2idx = predefined_data['dict']['src']
-        tgt_word2idx = predefined_data['dict']['tgt']
+        print('[Info] Build shared vocabulary for source and target.')
+        word2idx = build_vocab_idx(train_src_word_insts + train_tgt_word_insts, opt.min_word_count)
+        src_word2idx = word2idx
+        tgt_word2idx = {k: word2idx for k in target_config.keys()}
     else:
-        if opt.share_vocab:
-            train_tgt_word_insts = [tokens for inst in train_tgt_insts for tokens in inst.values()]
+        print('[Info] Build vocabulary for source.')
+        src_word2idx = build_vocab_idx(train_src_word_insts, opt.min_word_count)
 
-            print('[Info] Build shared vocabulary for source and target.')
-            word2idx = build_vocab_idx(train_src_word_insts + train_tgt_word_insts, opt.min_word_count)
-            src_word2idx = word2idx
-            tgt_word2idx = {k: word2idx for k in target_config.keys()}
-        else:
-            print('[Info] Build vocabulary for source.')
-            src_word2idx = build_vocab_idx(train_src_word_insts, opt.min_word_count)
+        print('[Info] Build vocabulary for targets.')
+        tgt_tokens = {}
+        for inst in train_tgt_insts:
+            for k, tokens in inst.items():
+                tgt_tokens.setdefault(k, []).append(tokens)
 
-            print('[Info] Build vocabulary for targets.')
-            tgt_tokens = {}
-            for inst in train_tgt_insts:
-                for k, tokens in inst.items():
-                    tgt_tokens.setdefault(k, []).append(tokens)
-
-            tgt_word2idx = {}
-            for k in target_config.keys():
-                vocab = build_vocab_idx(tgt_tokens[k], opt.min_tgt_word_count)
-                tgt_word2idx[k] = vocab
-                print(k.rjust(30), len(vocab), len(tgt_tokens[k]))
+        tgt_word2idx = {}
+        for k in target_config.keys():
+            vocab = build_vocab_idx(tgt_tokens[k], opt.min_tgt_word_count)
+            tgt_word2idx[k] = vocab
+            print(k.rjust(30), len(vocab), len(tgt_tokens[k]))
 
     # word to index
     print('[Info] Convert source word instances into sequences of word index.')
