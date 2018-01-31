@@ -12,7 +12,7 @@ class MimoDataLoader(object):
                  cuda=True, batch_size=64, shuffle=True, test=False, max_iters_per_epoch=None):
 
         assert src_insts
-        assert len(src_insts) >= batch_size
+        assert len(src_insts) >= batch_size, 'num_inst(%i) < batch_size(%i)' % (len(src_insts), batch_size)
 
         if tgt_insts:
             assert len(src_insts) == len(tgt_insts)

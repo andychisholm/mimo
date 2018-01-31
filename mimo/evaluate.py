@@ -1,5 +1,5 @@
 import ujson as json
-from mimo.model.translate import iter_decode
+from mimo.model.translate import iter_decodes_by_instance
 from tqdm import tqdm
 from itertools import takewhile
 from collections import defaultdict
@@ -25,13 +25,9 @@ baseline = {
 }
 
 
-def decode_entity_relations(translator, path, limit):
-    outputs = defaultdict(list)
-    for r in tqdm(iter_decode(translator, path, limit), total=limit):
-        outputs[r['instance_id']].append(r)
-
-    results_by_eid = {}
-    for entity_id, results in outputs.items():
+def iter_instance_decodes(translator, path, limit):
+    # todo: re-add progress bar
+    for instance_id, results in iter_decodes_by_instance(translator, path, limit):
         sources = [' '.join(r['source'][1:-1]) for r in results]
         targets = {k: ' '.join(t[1:-1]) for k, t in results[0]['targets'].items()}
 
@@ -44,13 +40,11 @@ def decode_entity_relations(translator, path, limit):
                     decodes[relation].extend(outputs)
 
         decodes = {k: sorted(vs, key=lambda o: o['score'], reverse=True) for k, vs in decodes.items()}
-        results_by_eid[entity_id] = {
+        yield instance_id, {
             'sources': sources,
             'targets': targets,
             'decodes': decodes
         }
-
-    return results_by_eid
 
 
 def evaluate_decodes(results):

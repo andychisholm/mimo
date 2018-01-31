@@ -17,7 +17,7 @@ from mimo.model.loader import MimoDataLoader
 from mimo.model.components.optim import ScheduledOptim
 from mimo.model.preprocess import target_config
 from mimo.model.model import GenerationModel
-from mimo.evaluate import decode_entity_relations, evaluate_decodes, get_summary_metrics
+from mimo.evaluate import iter_instance_decodes, evaluate_decodes, get_summary_metrics
 
 
 def get_performance(crit, pred, gold):
@@ -121,7 +121,7 @@ def eval_mimo_epoch(model):
     start_time = time.time()
 
     generator = GenerationModel(model, beam_size=5, n_best=10)
-    decodes = decode_entity_relations(generator, 'dev.jsonl.gz', 512)
+    decodes = dict(iter_instance_decodes(generator, 'dev.jsonl.gz', 512))
     metrics = get_summary_metrics(evaluate_decodes(decodes))
     return {
         'micro': metrics['micro'],

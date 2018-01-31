@@ -5,6 +5,8 @@ from tqdm import tqdm
 import random
 from types import SimpleNamespace
 from itertools import chain
+import os
+import subprocess
 from collections import Counter
 
 random.seed(1447)
@@ -109,27 +111,22 @@ def encode_mimo_instance(instance, max_src_len, max_inputs):
     return pairs
 
 
-def read_instances(path, max_src_len, max_inputs, limit=None):
-    iids = []
-    src_inst = []
-    tgt_inst = []
-
+def iter_read_instances(path, max_src_len, max_inputs, limit=None):
     print('Loading instances from:', path)
+
+    total = limit
+    if limit is None:
+        print('Counting lines: ' + path + '...')
+        total = int(subprocess.getstatusoutput('zcat ' + path + ' | wc -l')[1].strip())
 
     num_instances = 0
     with gzip.open(path) as f:
-        for line in tqdm(f):
+        for line in tqdm(f, total=total):
             num_instances += 1
             for iid, src, tgt in encode_mimo_instance(json.loads(line), max_src_len, max_inputs=max_inputs):
-                iids.append(iid)
-                src_inst.append(src)
-                tgt_inst.append(tgt)
+                yield iid, src, tgt
             if limit is not None and num_instances >= limit:
                 break
-
-    assert len(iids) == len(src_inst) and len(src_inst) == len(tgt_inst)
-    print('[Info] Got {} pairs over {} instances from {}'.format(len(tgt_inst), num_instances, path))
-    return iids, src_inst, tgt_inst
 
 
 def build_vocab_idx(word_insts, min_word_count):
@@ -191,10 +188,16 @@ def main():
     opt = SimpleNamespace(**params)
 
     # load training set
-    _, train_src_word_insts, train_tgt_insts = read_instances(opt.train_path, opt.max_src_seq_len, 1, None)
+    train_src_word_insts, train_tgt_insts = [], []
+    for iid, src, tgt in iter_read_instances(opt.train_path, opt.max_src_seq_len, 1, None):
+        train_src_word_insts.append(src)
+        train_tgt_insts.append(tgt)
 
-    # load validation set
-    _, valid_src_word_insts, valid_tgt_insts = read_instances(opt.valid_path, opt.max_src_seq_len, 1, None)
+    # load training set
+    valid_src_word_insts, valid_tgt_insts = [], []
+    for iid, src, tgt in iter_read_instances(opt.valid_path, opt.max_src_seq_len, 1, None):
+        valid_src_word_insts.append(src)
+        valid_tgt_insts.append(tgt)
 
     # build vocab
     if opt.share_vocab:

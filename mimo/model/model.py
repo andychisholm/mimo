@@ -28,6 +28,7 @@ class GenerationModel(object):
 
     @classmethod
     def load(cls, path, cuda=None, **kwargs):
+        print('Loading model: ' + path + ' ...')
         cuda = torch.cuda.is_available() if cuda is None else cuda
         if cuda:
             checkpoint = torch.load(path)
@@ -50,7 +51,7 @@ class GenerationModel(object):
             dropout=opt.dropout)
 
         model.load_state_dict(checkpoint['model'])
-        print('[Info] Trained model state loaded.')
+        print('Loaded model: ' + path)
 
         if cuda:
             model.cuda()
