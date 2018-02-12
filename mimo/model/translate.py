@@ -44,6 +44,7 @@ def _iter_decode_batches(translator, config, sequences, cuda, batch_size):
                     'score': score,
                     'tokens': [batched_data.tgt_idx2word[relation][idx] for idx in idx_seq]
                 })
+
         yield sequence
 
 
@@ -81,11 +82,13 @@ def iter_decodes_by_instance(*args, **kwargs):
     last_iid = None
     decodes = []
     for r in iter_decode(*args, **kwargs):
+        if last_iid is None:
+            last_iid = r['instance_id']
         if last_iid != r['instance_id']:
             if decodes:
                 yield last_iid, decodes
                 decodes = []
             last_iid = r['instance_id']
-            decodes.append(r)
+        decodes.append(r)
     if decodes:
         yield last_iid, decodes
